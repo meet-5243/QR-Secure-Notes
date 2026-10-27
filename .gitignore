@@ -17,6 +17,7 @@ data/*.db-journal
 data/*.db-wal
 exports/*.png
 exports/*.json
+exports/*.pdf
 
 # Logs
 logs/

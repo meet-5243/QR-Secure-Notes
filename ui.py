@@ -455,6 +455,8 @@ class QRSecureNotesApp:
         cnt_header_frame = ttk.Frame(left_form, style="Card.TFrame")
         cnt_header_frame.pack(fill=tk.X)
         tk.Label(cnt_header_frame, text="Note Content *", font=(THEME["font_family"], 9, "bold"), fg=THEME["text_primary"], bg=THEME["bg_card"]).pack(side=tk.LEFT)
+        
+        ttk.Button(cnt_header_frame, text="Import from PDF...", style="Secondary.TButton", command=self._handle_import_pdf_to_note).pack(side=tk.RIGHT, padx=(8, 0))
         self.lbl_char_count = tk.Label(cnt_header_frame, text="0 / 1500 chars", font=(THEME["font_family"], 8), fg=THEME["text_secondary"], bg=THEME["bg_card"])
         self.lbl_char_count.pack(side=tk.RIGHT)
 
@@ -587,6 +589,47 @@ class QRSecureNotesApp:
         self.current_preview_photo = None
         self.current_created_note_data = None
         self.set_status("Form reset.")
+
+    def _handle_import_pdf_to_note(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select PDF Document to Import Text",
+            initialdir=str(Path.home()),
+            filetypes=[("PDF Documents", "*.pdf")]
+        )
+        if not path:
+            return
+
+        try:
+            suggested_title, extracted_text = NoteManager.extract_text_from_pdf(path)
+
+            # Set title if empty or default
+            curr_title = self.entry_title.get().strip()
+            if not curr_title or curr_title == "Confidential Note":
+                self.entry_title.delete(0, tk.END)
+                self.entry_title.insert(0, suggested_title[:MAX_TITLE_CHARS])
+
+            # Populate content box
+            self.txt_content.delete("1.0", tk.END)
+            if len(extracted_text) > MAX_CONTENT_CHARS:
+                self.txt_content.insert("1.0", extracted_text[:MAX_CONTENT_CHARS])
+                messagebox.showwarning(
+                    "Text Truncated for QR Code",
+                    f"The PDF contains {len(extracted_text)} characters.\n\n"
+                    f"To ensure reliable QR code generation, content was trimmed to the safe limit of {MAX_CONTENT_CHARS} characters."
+                )
+            else:
+                self.txt_content.insert("1.0", extracted_text)
+
+            self._update_char_count()
+            self.set_status(f"Imported text from {Path(path).name}")
+            messagebox.showinfo(
+                "PDF Text Imported",
+                f"Successfully extracted text from:\n{Path(path).name}\n\n"
+                "You can now set a password and generate the secure QR code!"
+            )
+        except Exception as e:
+            logger.error("Failed to import PDF: %s", str(e))
+            messagebox.showerror("PDF Import Failed", str(e))
 
     def _handle_generate_note(self) -> None:
         title = self.entry_title.get().strip()
@@ -1442,8 +1485,9 @@ class DecryptedViewerDialog(tk.Toplevel):
 
     def __init__(self, parent: tk.Tk, note_dict: Dict[str, Any]):
         super().__init__(parent)
+        self.note_dict = note_dict
         self.title(f"Unlocked Note: {note_dict.get('title', 'Untitled')}")
-        self.geometry("540x420")
+        self.geometry("560x430")
         self.configure(bg=THEME["bg_card"])
         self.transient(parent)
         self.grab_set()
@@ -1472,10 +1516,28 @@ class DecryptedViewerDialog(tk.Toplevel):
         btn_row = tk.Frame(self, bg=THEME["bg_card"], padx=18, pady=14)
         btn_row.pack(fill=tk.X)
 
-        ttk.Button(btn_row, text="Copy Content", style="Secondary.TButton", command=lambda: self._copy(content)).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="Copy Content", style="Secondary.TButton", command=lambda: self._copy(content)).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text="Export as PDF (.pdf)...", style="Secondary.TButton", command=self._export_pdf).pack(side=tk.LEFT)
         ttk.Button(btn_row, text="Close", style="Primary.TButton", command=self.destroy).pack(side=tk.RIGHT)
 
     def _copy(self, content: str) -> None:
         self.clipboard_clear()
         self.clipboard_append(content)
         messagebox.showinfo("Copied", "Note text copied to clipboard.")
+
+    def _export_pdf(self) -> None:
+        title = self.note_dict.get("title", "note")
+        safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+        default_fn = f"decrypted_{safe_title}.pdf" if safe_title else "decrypted_note.pdf"
+        dest_path = filedialog.asksaveasfilename(
+            initialdir=str(EXPORTS_DIR),
+            initialfile=default_fn,
+            defaultextension=".pdf",
+            filetypes=[("PDF Document", "*.pdf")]
+        )
+        if dest_path:
+            try:
+                NoteManager.export_note_to_pdf(self.note_dict, dest_path)
+                messagebox.showinfo("Export Successful", f"Decrypted note successfully exported to PDF:\n{dest_path}")
+            except Exception as e:
+                messagebox.showerror("Export Failed", f"Could not export note to PDF: {str(e)}")

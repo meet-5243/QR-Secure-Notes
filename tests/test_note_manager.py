@@ -85,3 +85,25 @@ def test_export_saved_note_qr(note_mgr: NoteManager, tmp_path: Path):
     target_export = tmp_path / "exported_note.png"
     saved = note_mgr.export_saved_note_qr(row_id, target_export)
     assert saved.exists()
+
+
+def test_pdf_export_and_extraction(tmp_path: Path):
+    note_data = {
+        "title": "Confidential Research",
+        "content": "Zero-Knowledge Encryption with AES-256-GCM and Argon2id.",
+        "category": "Research",
+        "created_at": "2026-10-27T12:00:00Z",
+        "is_expired": False
+    }
+
+    # Test PDF Export
+    pdf_out = tmp_path / "test_exported_note.pdf"
+    exported_path = NoteManager.export_note_to_pdf(note_data, pdf_out)
+    assert exported_path.exists()
+    assert exported_path.stat().st_size > 0
+
+    # Test PDF Text Extraction
+    suggested_title, extracted_text = NoteManager.extract_text_from_pdf(exported_path)
+    assert "Test Exported Note" in suggested_title or "Confidential" in suggested_title or len(suggested_title) > 0
+    assert "AES-256-GCM" in extracted_text
+

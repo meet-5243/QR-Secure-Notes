@@ -14,7 +14,10 @@ from PIL import Image
 import encryption
 import qr_manager
 import database
-from config import EXPORTS_DIR, DB_PATH, logger
+from config import EXPORTS_DIR, DB_PATH, MAX_CONTENT_CHARS, logger
+import pypdf
+from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 
 
 class PasswordStrength:
@@ -221,3 +224,120 @@ class NoteManager:
             "stats": stats,
             "recent_notes": recent_notes
         }
+
+    @staticmethod
+    def extract_text_from_pdf(pdf_path: Path | str) -> Tuple[str, str]:
+        """
+        Extracts readable text from a selected PDF document.
+        Returns:
+            (suggested_title: str, extracted_content: str)
+        """
+        path = Path(pdf_path).resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"PDF file not found: {path}")
+
+        try:
+            reader = pypdf.PdfReader(str(path))
+            pages_text = []
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text()
+                if text:
+                    pages_text.append(text.strip())
+
+            full_text = "\n\n".join(pages_text).strip()
+            if not full_text:
+                raise ValueError("No readable text found in the selected PDF (it may contain only scanned images).")
+
+            suggested_title = path.stem.replace("_", " ").title()
+            return suggested_title, full_text
+        except Exception as e:
+            if isinstance(e, (FileNotFoundError, ValueError)):
+                raise
+            logger.error("Error reading PDF: %s", str(e))
+            raise ValueError(f"Could not read PDF file: {str(e)}")
+
+    @staticmethod
+    def export_note_to_pdf(note_dict: Dict[str, Any], output_path: Path | str) -> Path:
+        """
+        Exports a decrypted note record into a formatted, high-quality PDF document.
+        """
+        path = Path(output_path).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        title = str(note_dict.get("title", "Untitled Note"))
+        content = str(note_dict.get("content", ""))
+        category = str(note_dict.get("category", "General"))
+        created_at = str(note_dict.get("created_at", "N/A"))
+        is_expired = note_dict.get("is_expired", False)
+
+        # Sanitize for latin-1 core font support
+        def clean_str(s: str) -> str:
+            return s.encode("latin-1", "replace").decode("latin-1")
+
+        pdf = FPDF(orientation="P", unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_margins(18, 18, 18)
+        pdf.add_page()
+
+        # Header Banner
+        pdf.set_fill_color(18, 30, 49)
+        pdf.rect(18, 18, 174, 28, "F")
+
+        pdf.set_xy(22, 22)
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(0, 8, "QR SECURE NOTES - DECRYPTED EXPORT", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        pdf.set_xy(22, 31)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(175, 200, 240)
+        pdf.cell(0, 6, "Encrypted Storage - Zero-Knowledge Authenticated Document", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        pdf.set_y(52)
+
+        # Metadata Card
+        pdf.set_fill_color(245, 247, 250)
+        pdf.set_draw_color(210, 220, 235)
+        pdf.rect(18, 52, 174, 24, "DF")
+
+        pdf.set_xy(22, 55)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(25, 40, 65)
+        pdf.cell(20, 6, "Title:")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(100, 6, clean_str(title))
+        pdf.ln(6)
+
+        pdf.set_x(22)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(20, 6, "Category:")
+        pdf.set_font("Helvetica", "", 9)
+        status_tag = " [EXPIRED]" if is_expired else " [ACTIVE]"
+        pdf.cell(50, 6, f"{clean_str(category)}{status_tag}")
+
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(22, 6, "Created:")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 6, clean_str(created_at), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        pdf.set_y(82)
+
+        # Note Content Body
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(20, 70, 160)
+        pdf.cell(0, 8, "Note Content:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(1)
+
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(35, 40, 50)
+        pdf.multi_cell(0, 5.2, clean_str(content))
+        pdf.ln(10)
+
+        # Security Watermark Footer
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(130, 140, 155)
+        pdf.cell(0, 6, "Decrypted offline via QR Secure Notes - Authenticated AES-256-GCM / Argon2id", align="C")
+
+        pdf.output(str(path))
+        logger.info("Exported note to PDF at: %s", str(path))
+        return path
